@@ -57,11 +57,11 @@ def find_target_community(input_community, community_centroids, G, nodes):
     input_songs = set(nodes[nodes['community'] == input_community]['track_id'])
     valid_communities = set()
     for node_id in input_songs:
-        for neighbor_id in list(G.predecessors(node_id)) + list(G.successors(node_id)):
+        for neighbor_id in list(G.neighbors(node_id)):
             bridge_comm = G.nodes[neighbor_id].get('community')
             bw = G.nodes[neighbor_id].get('betweenness')
             if bridge_comm in (input_community,) and bw is not None:
-                for second_neighbor in list(G.predecessors(neighbor_id)) + list(G.successors(neighbor_id)):
+                for second_neighbor in list(G.neighbors(neighbor_id)):
                     tc = G.nodes[second_neighbor].get('community')
                     if tc != input_community:
                         valid_communities.add(tc)
@@ -82,7 +82,7 @@ def find_bridge_song(input_community, target_community, G, nodes):
             continue
         if data.get('betweenness') is None:
             continue
-        neighbors = list(G.predecessors(node_id)) + list(G.successors(node_id))
+        neighbors = list(G.neighbors(node_id))
         neighbor_comms = {G.nodes[n].get('community') for n in neighbors}
         if input_community in neighbor_comms and target_community in neighbor_comms:
             candidates.append((node_id, data['betweenness'], data.get('community')))
@@ -151,7 +151,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
         for idx in to_replace:
             current_id = final_path.loc[idx, 'track_id']
             used_ids = set(final_path['track_id'])
-            neighbors = list(G.predecessors(current_id)) + list(G.successors(current_id))
+            neighbors = list(G.neighbors(current_id))
             replacements = [
                 n for n in neighbors
                 if G.nodes[n].get('artists') != artist and n not in used_ids
@@ -170,7 +170,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
         while len(final_path) < queue_length:
             last_id = final_path.iloc[-1]['track_id']
             neighbors = [
-                n for n in list(G.predecessors(last_id)) + list(G.successors(last_id))
+                n for n in list(G.neighbors(last_id))
                 if n not in used_ids
             ]
             if not neighbors:

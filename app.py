@@ -307,15 +307,12 @@ if selected_track_id and st.button("Generate Queue", type="primary"):
         try:
             queue = generate_queue(selected_track_id, G, nodes, community_centroids)
             st.success(f"Queue generated — {len(queue)} songs")
-            st.dataframe(
-                queue[['track_name', 'artist', 'genre', 'community']].rename(columns={
-                    'track_name': 'Track',
-                    'artist':     'Artist',
-                    'genre':      'Genre',
-                    'community':  'Community'
-                }),
-                use_container_width=True,
-                hide_index=False
-            )
+            for i, row in queue.iterrows():
+                st.markdown(
+                    f"**{i + 1}. {row['track_name']}** &nbsp; {row['artist']}<br>"
+                    f"<small><i>{row['genre']}</i></small>",
+                    unsafe_allow_html=True
+                )
+                st.divider()
         except ValueError as e:
             st.error(f"Error: {e}")

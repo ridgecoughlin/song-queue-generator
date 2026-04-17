@@ -302,7 +302,7 @@ st.markdown("""
         margin-bottom: 0.4rem; color: #ffffff;
     }
     .hero h1 span { color: #1db954; }
-    .hero p { color: #6a6a6a; font-size: 0.95rem; margin: 0; }
+    .hero p { color: #aaaaaa; font-size: 0.95rem; margin: 0; }
 
     /* style the generate button green */
     div.stButton > button[kind="primary"] {

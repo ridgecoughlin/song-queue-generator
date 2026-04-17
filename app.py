@@ -289,6 +289,14 @@ def build_search_df():
 search_df = build_search_df()
 label_to_id = dict(zip(search_df['label'], search_df['track_id']))
 
+# ── session state ────────────────────────────────────────────────────────────────
+if 'queue' not in st.session_state:
+    st.session_state.queue = None          # current DataFrame
+if 'breadcrumb' not in st.session_state:
+    st.session_state.breadcrumb = []       # list of (track_name, artist) tuples
+if 'pending_seed' not in st.session_state:
+    st.session_state.pending_seed = None   # track_id queued for next rerun
+
 # ── custom css ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -304,7 +312,7 @@ st.markdown("""
     .hero h1 span { color: #1db954; }
     .hero p { color: #aaaaaa; font-size: 0.95rem; margin: 0; }
 
-    /* style the generate button green */
+    /* generate button */
     div.stButton > button[kind="primary"] {
         background-color: #1db954 !important;
         border: none !important;
@@ -319,13 +327,42 @@ st.markdown("""
         background-color: #1ed760 !important;
     }
 
+    /* breadcrumb */
+    .breadcrumb {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        margin: 1.5rem 0 0.25rem 0;
+        font-size: 0.75rem;
+        color: #aaaaaa;
+        line-height: 1.6;
+    }
+    .breadcrumb-song {
+        color: #ffffff;
+        font-weight: 600;
+    }
+    .breadcrumb-sep {
+        color: #1db954;
+        font-size: 0.7rem;
+        margin: 0 2px;
+    }
+    .breadcrumb-reset {
+        margin-left: 6px;
+        color: #aaaaaa;
+        font-size: 0.7rem;
+        text-decoration: underline;
+        cursor: pointer;
+    }
+
+    /* queue */
     .queue-header {
         font-size: 0.7rem;
         color: #aaaaaa;
         text-transform: uppercase;
         letter-spacing: 0.12em;
         font-weight: 600;
-        margin: 1.75rem 0 0.5rem 0;
+        margin: 0.5rem 0 0.5rem 0;
         padding-bottom: 0.5rem;
         border-bottom: 1px solid #2a2a2a;
     }
@@ -333,10 +370,9 @@ st.markdown("""
         display: flex;
         align-items: center;
         gap: 12px;
-        padding: 9px 0;
+        padding: 2px 0;
         border-bottom: 1px solid #1a1a1a;
     }
-    .queue-row:hover { background: rgba(255,255,255,0.03); border-radius: 4px; }
     .queue-num {
         font-size: 0.8rem; color: #aaaaaa; font-weight: 500;
         min-width: 18px; text-align: right; flex-shrink: 0;
@@ -355,7 +391,27 @@ st.markdown("""
     }
     .queue-genre {
         font-size: 0.68rem; color: #888888; font-weight: 500;
-        white-space: nowrap; margin-left: auto; flex-shrink: 0; padding-left: 8px;
+        white-space: nowrap; flex-shrink: 0; padding-left: 4px;
+    }
+
+    /* queue row buttons — transparent, full-width, left-aligned */
+    div[data-testid="stHorizontalBlock"] div.stButton > button {
+        background: transparent !important;
+        border: none !important;
+        color: #aaaaaa !important;
+        font-size: 0.72rem !important;
+        font-weight: 500 !important;
+        padding: 0.25rem 0.5rem !important;
+        border-radius: 4px !important;
+        width: 100% !important;
+        text-align: left !important;
+        cursor: pointer !important;
+        white-space: nowrap !important;
+        margin: 0 !important;
+    }
+    div[data-testid="stHorizontalBlock"] div.stButton > button:hover {
+        background: rgba(29,185,84,0.12) !important;
+        color: #1db954 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -368,6 +424,20 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# handle a row-click that was set in a previous rerun
+if st.session_state.pending_seed is not None:
+    seed_id = st.session_state.pending_seed
+    st.session_state.pending_seed = None
+    with st.spinner(""):
+        try:
+            new_queue = generate_queue(seed_id, G, nodes, neighbor_communities, community_centroids)
+            d = G.nodes[seed_id]
+            st.session_state.breadcrumb.append((d.get('track_name', ''), d.get('artists', '')))
+            st.session_state.queue = new_queue
+        except ValueError as e:
+            st.error(f"Error: {e}")
+
+# search + generate
 selection = st.selectbox(
     "Search for a song or artist",
     options=search_df['label'].tolist(),
@@ -382,20 +452,54 @@ if selected_track_id and st.button("Generate Queue", type="primary", use_contain
     with st.spinner(""):
         try:
             queue = generate_queue(selected_track_id, G, nodes, neighbor_communities, community_centroids)
-            st.markdown(f"<div class='queue-header'>Queue &nbsp;·&nbsp; {len(queue)} tracks</div>", unsafe_allow_html=True)
-            rows_html = ""
-            for i, row in queue.iterrows():
-                rows_html += f"""
-                <div class='queue-row'>
-                    <div class='queue-num'>{i + 1}</div>
-                    <div class='queue-main'>
-                        <div class='queue-title-row'>
-                            <span class='queue-track'>{row['track_name']}</span>
-                            <span class='queue-artist'>{row['artist']}</span>
-                        </div>
-                    </div>
-                    <div class='queue-genre'>{row['genre']}</div>
-                </div>"""
-            st.markdown(rows_html, unsafe_allow_html=True)
+            d = G.nodes[selected_track_id]
+            st.session_state.breadcrumb = [(d.get('track_name', ''), d.get('artists', ''))]
+            st.session_state.queue = queue
         except ValueError as e:
             st.error(f"Error: {e}")
+
+# render queue
+if st.session_state.queue is not None:
+    queue = st.session_state.queue
+
+    # breadcrumb trail
+    crumbs = st.session_state.breadcrumb
+    if crumbs:
+        parts = []
+        for i, (name, _) in enumerate(crumbs):
+            if i > 0:
+                parts.append("<span class='breadcrumb-sep'>›</span>")
+            parts.append(f"<span class='breadcrumb-song'>{name}</span>")
+        crumb_html = "<div class='breadcrumb'>" + "".join(parts) + "</div>"
+        st.markdown(crumb_html, unsafe_allow_html=True)
+
+    # reset button (small, inline)
+    if len(crumbs) > 1:
+        if st.button("↩ Start over", key="reset"):
+            st.session_state.queue = None
+            st.session_state.breadcrumb = []
+            st.rerun()
+
+    st.markdown(f"<div class='queue-header'>Queue &nbsp;·&nbsp; {len(queue)} tracks &nbsp;·&nbsp; click any song to branch</div>", unsafe_allow_html=True)
+
+    for i, row in queue.iterrows():
+        # each queue row: number + song info on left, genre on right, branch button far right
+        col_num, col_info, col_genre, col_btn = st.columns([0.5, 6, 2, 2])
+
+        with col_num:
+            st.markdown(f"<div class='queue-num' style='padding-top:8px'>{i + 1}</div>", unsafe_allow_html=True)
+
+        with col_info:
+            st.markdown(f"""
+            <div style='padding: 6px 0 6px 0;'>
+                <div class='queue-track'>{row['track_name']}</div>
+                <div class='queue-artist'>{row['artist']}</div>
+            </div>""", unsafe_allow_html=True)
+
+        with col_genre:
+            st.markdown(f"<div class='queue-genre' style='padding-top:14px'>{row['genre']}</div>", unsafe_allow_html=True)
+
+        with col_btn:
+            if st.button("Queue from here →", key=f"branch_{i}_{row['track_id']}"):
+                st.session_state.pending_seed = row['track_id']
+                st.rerun()

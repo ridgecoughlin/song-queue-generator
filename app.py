@@ -289,33 +289,90 @@ def build_search_df():
 search_df = build_search_df()
 label_to_id = dict(zip(search_df['label'], search_df['track_id']))
 
+# ── custom css ──────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .hero { text-align: center; padding: 2rem 0 1rem 0; }
+    .hero h1 { font-size: 2.6rem; font-weight: 800; letter-spacing: -1px; margin-bottom: 0.2rem; }
+    .hero p { color: #888; font-size: 1rem; margin-top: 0; }
+
+    .selected-card {
+        background: #f7f7f7;
+        border-left: 4px solid #1db954;
+        border-radius: 6px;
+        padding: 12px 16px;
+        margin: 1rem 0;
+    }
+    .selected-card .label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .selected-card .song { font-size: 1.1rem; font-weight: 700; margin: 2px 0; }
+    .selected-card .artist { font-size: 0.9rem; color: #555; }
+
+    .queue-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        padding: 10px 0;
+        border-bottom: 1px solid #efefef;
+    }
+    .queue-num { font-size: 0.85rem; color: #bbb; font-weight: 600; min-width: 20px; padding-top: 2px; }
+    .queue-info .track { font-size: 1rem; font-weight: 700; }
+    .queue-info .artist { font-size: 0.88rem; color: #555; margin: 1px 0; }
+    .queue-info .genre-tag {
+        display: inline-block;
+        font-size: 0.72rem;
+        color: #888;
+        background: #f0f0f0;
+        border-radius: 10px;
+        padding: 1px 8px;
+        margin-top: 3px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ── ui ──────────────────────────────────────────────────────────────────────────
-st.title("🎵 Song Queue Generator")
-st.caption("Search for a song and we'll build a queue that takes you on a sonic journey.")
+st.markdown("""
+<div class='hero'>
+    <h1>Song Queue Generator</h1>
+    <p>Pick a song. We'll take you somewhere new.</p>
+</div>
+""", unsafe_allow_html=True)
 
 selection = st.selectbox(
     "Search for a song or artist",
     options=search_df['label'].tolist(),
     index=None,
-    placeholder="e.g. Bohemian Rhapsody or Queen"
+    placeholder="e.g. Bohemian Rhapsody or Queen",
+    label_visibility="collapsed"
 )
 
 selected_track_id = label_to_id.get(selection)
 
-if selected_track_id and st.button("Generate Queue", type="primary"):
+if selected_track_id:
+    row = nodes[nodes['track_id'] == selected_track_id].iloc[0]
+    st.markdown(f"""
+    <div class='selected-card'>
+        <div class='label'>Selected</div>
+        <div class='song'>{row['track_name']}</div>
+        <div class='artist'>{row['artists']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+if selected_track_id and st.button("Generate Queue", type="primary", use_container_width=True):
     with st.spinner("Building your queue..."):
         try:
             queue = generate_queue(selected_track_id, G, nodes, neighbor_communities, community_centroids)
-            st.success(f"Queue generated — {len(queue)} songs")
+            st.markdown(f"<p style='color:#888; font-size:0.85rem; margin: 1rem 0 0.25rem 0;'>YOUR QUEUE &nbsp;·&nbsp; {len(queue)} songs</p>", unsafe_allow_html=True)
             rows_html = ""
             for i, row in queue.iterrows():
-                rows_html += (
-                    f"<div style='padding: 8px 0; border-bottom: 1px solid #e0e0e0;'>"
-                    f"<span style='font-weight:600;'>{i + 1}. {row['track_name']}</span>"
-                    f" &nbsp; {row['artist']}<br>"
-                    f"<span style='font-size:0.8em; color:gray;'><i>{row['genre']}</i></span>"
-                    f"</div>"
-                )
+                rows_html += f"""
+                <div class='queue-row'>
+                    <div class='queue-num'>{i + 1}</div>
+                    <div class='queue-info'>
+                        <div class='track'>{row['track_name']}</div>
+                        <div class='artist'>{row['artist']}</div>
+                        <span class='genre-tag'>{row['genre']}</span>
+                    </div>
+                </div>"""
             st.markdown(rows_html, unsafe_allow_html=True)
         except ValueError as e:
             st.error(f"Error: {e}")

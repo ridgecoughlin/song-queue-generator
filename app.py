@@ -195,26 +195,40 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
 G, nodes = load_graph()
 community_centroids = load_community_centroids()
 
+# ── search index ────────────────────────────────────────────────────────────────
+@st.cache_data
+def build_search_df():
+    df = pd.read_parquet("data/nodes.parquet")[['track_id', 'track_name', 'artists', 'popularity']]
+    df['label'] = df['track_name'] + ' — ' + df['artists']
+    df = df.sort_values('popularity', ascending=False).drop_duplicates(subset='label')
+    return df
+
+search_df = build_search_df()
+
 # ── ui ──────────────────────────────────────────────────────────────────────────
 st.title("🎵 Song Queue Generator")
 st.caption("Search for a song and we'll build a queue that takes you on a sonic journey.")
 
-search_term = st.text_input("Search for a song", placeholder="e.g. Bohemian Rhapsody")
+search_input = st.text_input(
+    "Search for a song or artist",
+    placeholder="e.g. Bohemian Rhapsody or Queen"
+)
 
 selected_track_id = None
 
-if search_term and len(search_term) >= 2:
-    mask = nodes['track_name'].str.lower().str.contains(search_term.lower(), na=False)
-    results = nodes[mask].sort_values('popularity', ascending=False).head(8)
+if search_input and len(search_input) >= 2:
+    term = search_input.lower()
+    mask = (
+        search_df['track_name'].str.lower().str.contains(term, na=False) |
+        search_df['artists'].str.lower().str.contains(term, na=False)
+    )
+    results = search_df[mask].head(10)
 
     if results.empty:
         st.warning("No songs found. Try a different search.")
     else:
-        options = {
-            f"{row['track_name']} — {row['artists']}": row['track_id']
-            for _, row in results.iterrows()
-        }
-        selection = st.radio("Select a song", options=list(options.keys()), index=0)
+        options = {row['label']: row['track_id'] for _, row in results.iterrows()}
+        selection = st.selectbox("Select a song", options=list(options.keys()), index=0)
         selected_track_id = options[selection]
 
 if selected_track_id and st.button("Generate Queue", type="primary"):

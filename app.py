@@ -16,7 +16,7 @@ def load_graph():
     nodes = pd.read_parquet("data/nodes.parquet")
     edges = pd.read_parquet("data/edges.parquet")
 
-    G = nx.DiGraph()
+    G = nx.Graph()
 
     for _, row in nodes.iterrows():
         G.add_node(row['track_id'], **row.to_dict())

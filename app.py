@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from neo4j import GraphDatabase
+import networkx as nx
 
 # ── page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -10,75 +10,37 @@ st.set_page_config(
     layout="centered"
 )
 
-# ── neo4j connection ────────────────────────────────────────────────────────────
+# ── data loading ────────────────────────────────────────────────────────────────
 @st.cache_resource
-def get_driver():
-    return GraphDatabase.driver(
-        st.secrets["NEO4J_URI"],
-        auth=(st.secrets["NEO4J_USER"], st.secrets["NEO4J_PASSWORD"])
-    )
+def load_graph():
+    nodes = pd.read_parquet("data/nodes.parquet")
+    edges = pd.read_parquet("data/edges.parquet")
 
-def run_query(query, **kwargs):
-    driver = get_driver()
-    with driver.session(database="neo4j") as session:
-        result = session.run(query, **kwargs)
-        return pd.DataFrame([r.values() for r in result], columns=result.keys())
+    G = nx.DiGraph()
 
-def neo4j_run(query, **kwargs):
-    driver = get_driver()
-    with driver.session(database="neo4j") as session:
-        return session.run(query, **kwargs)
+    for _, row in nodes.iterrows():
+        G.add_node(row['track_id'], **row.to_dict())
 
-# ── graph projection ────────────────────────────────────────────────────────────
-@st.cache_resource
-def ensure_projection():
-    neo4j_run("CALL gds.graph.drop('song_graph', false) YIELD graphName")
-    result = run_query("""
-        CALL gds.graph.project(
-            'song_graph',
-            'Song',
-            {
-                SIMILAR_TO: {
-                    orientation: 'UNDIRECTED',
-                    properties: ['similarity', 'cost']
-                }
-            }
-        )
-        YIELD nodeCount, relationshipCount
-        RETURN nodeCount, relationshipCount
-    """)
-    return result
+    for _, row in edges.iterrows():
+        G.add_edge(row['source'], row['target'], cost=row['cost'], similarity=row['similarity'])
 
-# ── centroid cache ──────────────────────────────────────────────────────────────
+    return G, nodes
+
 @st.cache_data
 def load_community_centroids():
-    centroid_df = run_query("""
-        MATCH (s:Song)
-        WHERE s.community IS NOT NULL
-        RETURN s.community             AS community,
-               avg(s.danceability)     AS danceability,
-               avg(s.energy)           AS energy,
-               avg(s.loudness)         AS loudness,
-               avg(s.speechiness)      AS speechiness,
-               avg(s.acousticness)     AS acousticness,
-               avg(s.instrumentalness) AS instrumentalness,
-               avg(s.liveness)         AS liveness,
-               avg(s.valence)          AS valence,
-               avg(s.tempo)            AS tempo,
-               avg(s.mode)             AS mode
-    """)
+    nodes = pd.read_parquet("data/nodes.parquet")
     feature_cols = [
         'danceability', 'energy', 'loudness', 'speechiness',
         'acousticness', 'instrumentalness', 'liveness', 'valence',
         'tempo', 'mode'
     ]
     return {
-        row['community']: {col: row[col] for col in feature_cols}
-        for _, row in centroid_df.iterrows()
+        community: {col: group[col].mean() for col in feature_cols}
+        for community, group in nodes.groupby('community')
     }
 
 # ── algorithm functions ─────────────────────────────────────────────────────────
-def find_target_community(input_community, community_centroids):
+def find_target_community(input_community, community_centroids, G, nodes):
     input_centroid = np.array(list(community_centroids[input_community].values()))
 
     distances = []
@@ -91,19 +53,18 @@ def find_target_community(input_community, community_centroids):
     distances.sort(key=lambda x: x[1])
     ranked_communities = [c for c, _ in distances]
 
-    all_bridge_counts = run_query("""
-        MATCH (bridge:Song)-[:SIMILAR_TO]-(a:Song),
-              (bridge:Song)-[:SIMILAR_TO]-(b:Song)
-        WHERE a.community = $input_community
-          AND bridge.community IN [$input_community, a.community]
-          AND bridge.betweenness IS NOT NULL
-        RETURN DISTINCT b.community AS target_community,
-               count(DISTINCT bridge) AS bridge_count
-    """, input_community=int(input_community))
-
-    valid_communities = set(
-        all_bridge_counts[all_bridge_counts['bridge_count'] > 0]['target_community'].tolist()
-    )
+    # find reachable communities via bridge songs
+    input_songs = set(nodes[nodes['community'] == input_community]['track_id'])
+    valid_communities = set()
+    for node_id in input_songs:
+        for neighbor_id in list(G.predecessors(node_id)) + list(G.successors(node_id)):
+            bridge_comm = G.nodes[neighbor_id].get('community')
+            bw = G.nodes[neighbor_id].get('betweenness')
+            if bridge_comm in (input_community,) and bw is not None:
+                for second_neighbor in list(G.predecessors(neighbor_id)) + list(G.successors(neighbor_id)):
+                    tc = G.nodes[second_neighbor].get('community')
+                    if tc != input_community:
+                        valid_communities.add(tc)
 
     rng = np.random.default_rng()
     for batch_size in [5, 10, 20, len(ranked_communities)]:
@@ -114,98 +75,66 @@ def find_target_community(input_community, community_centroids):
     raise ValueError(f'No reachable target community found from community {input_community}')
 
 
-def find_bridge_song(input_community, target_community):
-    result = run_query("""
-        MATCH (bridge:Song)-[:SIMILAR_TO]-(a:Song),
-              (bridge:Song)-[:SIMILAR_TO]-(b:Song)
-        WHERE a.community = $input_community
-          AND b.community = $target_community
-          AND bridge.community IN [$input_community, $target_community]
-          AND bridge.betweenness IS NOT NULL
-        RETURN DISTINCT
-            bridge.id          AS track_id,
-            bridge.track_name  AS track_name,
-            bridge.genre       AS genre,
-            bridge.community   AS community,
-            bridge.betweenness AS betweenness
-        ORDER BY betweenness DESC
-        LIMIT 3
-    """, input_community=int(input_community), target_community=int(target_community))
+def find_bridge_song(input_community, target_community, G, nodes):
+    candidates = []
+    for node_id, data in G.nodes(data=True):
+        if data.get('community') not in (input_community, target_community):
+            continue
+        if data.get('betweenness') is None:
+            continue
+        neighbors = list(G.predecessors(node_id)) + list(G.successors(node_id))
+        neighbor_comms = {G.nodes[n].get('community') for n in neighbors}
+        if input_community in neighbor_comms and target_community in neighbor_comms:
+            candidates.append((node_id, data['betweenness'], data.get('community')))
 
-    if result.empty:
+    if not candidates:
         raise ValueError(f'No bridge song found between communities {input_community} and {target_community}')
 
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    top3 = candidates[:3]
     rng = np.random.default_rng()
-    best = result.iloc[rng.integers(0, len(result))]
-    return best['track_id'], int(best['community'])
+    chosen = top3[rng.integers(0, len(top3))]
+    return chosen[0], int(chosen[2])
 
 
-def pick_destination(target_comm, bridge_id):
-    result = run_query("""
-        MATCH (s:Song)
-        WHERE s.community = $target_community
-        AND s.id <> $bridge_track_id
-        RETURN s.id AS track_id, s.track_name AS track_name,
-               s.genre AS genre, s.popularity AS popularity
-    """, target_community=int(target_comm), bridge_track_id=bridge_id)
-
+def pick_destination(target_comm, bridge_id, nodes):
+    pool = nodes[(nodes['community'] == target_comm) & (nodes['track_id'] != bridge_id)]
     rng = np.random.default_rng()
-    return result.iloc[rng.integers(0, len(result))]
+    return pool.iloc[rng.integers(0, len(pool))]
 
 
-def shortest_path(start_track_id, target_track_id):
-    result = run_query("""
-        MATCH (source:Song {id: $source_id}), (target:Song {id: $target_id})
-        CALL gds.shortestPath.dijkstra.stream('song_graph',
-            {
-                sourceNode: source,
-                targetNode: target,
-                relationshipWeightProperty: 'cost'
-            }
-        )
-        YIELD totalCost, nodeIds
-        RETURN
-            totalCost,
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).id] AS track_ids,
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).track_name] AS track_names,
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).artists] AS artists,
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).genre] AS genres,
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).community] AS communities
-    """, source_id=start_track_id, target_id=target_track_id)
-
-    if result.empty:
+def shortest_path(start_track_id, target_track_id, G):
+    try:
+        path_ids = nx.dijkstra_path(G, start_track_id, target_track_id, weight='cost')
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
         raise ValueError(f'No path found between {start_track_id} and {target_track_id}')
 
-    path = result.iloc[0]
-    return pd.DataFrame({
-        'track_id':   path['track_ids'],
-        'track_name': path['track_names'],
-        'artist':     path['artists'],
-        'genre':      path['genres'],
-        'community':  path['communities']
-    })
+    rows = []
+    for tid in path_ids:
+        d = G.nodes[tid]
+        rows.append({
+            'track_id':   tid,
+            'track_name': d.get('track_name'),
+            'artist':     d.get('artists'),
+            'genre':      d.get('genre'),
+            'community':  d.get('community'),
+        })
+    return pd.DataFrame(rows)
 
 
-def generate_queue(input_track_id, community_centroids, queue_length=10, max_artist_appearances=2):
-    song_result = run_query("""
-        MATCH (s:Song {id: $track_id})
-        RETURN s.id AS track_id, s.track_name AS track_name,
-               s.community AS community, s.artists AS artist
-    """, track_id=input_track_id)
-
-    if song_result.empty:
+def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=10, max_artist_appearances=2):
+    if input_track_id not in G.nodes:
         raise ValueError(f'No song found with track_id: {input_track_id}')
 
-    input_song = song_result.iloc[0]
-    input_id = input_song['track_id']
-    input_community = int(input_song['community'])
+    input_data = G.nodes[input_track_id]
+    input_community = int(input_data['community'])
 
-    target_community = find_target_community(input_community, community_centroids)
-    bridge_id, bridge_community = find_bridge_song(input_community, target_community)
-    dest_row = pick_destination(target_community, bridge_id)
+    target_community = find_target_community(input_community, community_centroids, G, nodes)
+    bridge_id, bridge_community = find_bridge_song(input_community, target_community, G, nodes)
+    dest_row = pick_destination(target_community, bridge_id, nodes)
 
-    path1 = shortest_path(input_id, bridge_id)
-    path2 = shortest_path(bridge_id, dest_row['track_id'])
+    path1 = shortest_path(input_track_id, bridge_id, G)
+    path2 = shortest_path(bridge_id, dest_row['track_id'], G)
     final_path = pd.concat([path1, path2.iloc[1:]], ignore_index=True)
 
     final_path = final_path.drop_duplicates(subset='track_id', keep='first')
@@ -215,60 +144,55 @@ def generate_queue(input_track_id, community_centroids, queue_length=10, max_art
     # artist repeat limiting
     artist_counts = final_path['artist'].value_counts()
     excess_artists = artist_counts[artist_counts > max_artist_appearances].index.tolist()
+    rng = np.random.default_rng()
     for artist in excess_artists:
         artist_rows = final_path[final_path['artist'] == artist]
         to_replace = artist_rows.index[max_artist_appearances:]
         for idx in to_replace:
             current_id = final_path.loc[idx, 'track_id']
-            used_ids = final_path['track_id'].tolist()
-            replacement = run_query("""
-                MATCH (s:Song {id: $track_id})-[:SIMILAR_TO]->(n:Song)
-                WHERE n.artists <> $artist
-                  AND NOT n.id IN $used_ids
-                RETURN n.id AS track_id, n.track_name AS track_name,
-                       n.artists AS artist, n.genre AS genre,
-                       n.community AS community
-                ORDER BY n.betweenness IS NOT NULL DESC
-                LIMIT 1
-            """, track_id=current_id, artist=artist, used_ids=used_ids)
-            if not replacement.empty:
-                r = replacement.iloc[0]
+            used_ids = set(final_path['track_id'])
+            neighbors = list(G.predecessors(current_id)) + list(G.successors(current_id))
+            replacements = [
+                n for n in neighbors
+                if G.nodes[n].get('artists') != artist and n not in used_ids
+            ]
+            if replacements:
+                r_id = replacements[rng.integers(0, len(replacements))]
+                d = G.nodes[r_id]
                 final_path.loc[idx, ['track_id', 'track_name', 'artist', 'genre', 'community']] = \
-                    [r['track_id'], r['track_name'], r['artist'], r['genre'], r['community']]
+                    [r_id, d.get('track_name'), d.get('artists'), d.get('genre'), d.get('community')]
 
     # enforce fixed queue length
     if len(final_path) > queue_length:
         final_path = final_path.iloc[:queue_length]
     elif len(final_path) < queue_length:
-        used_ids = final_path['track_id'].tolist()
+        used_ids = set(final_path['track_id'])
         while len(final_path) < queue_length:
             last_id = final_path.iloc[-1]['track_id']
-            neighbors = run_query("""
-                MATCH (s:Song {id: $track_id})-[:SIMILAR_TO]->(n:Song)
-                WHERE NOT n.id IN $used_ids
-                RETURN n.id AS track_id, n.track_name AS track_name,
-                       n.artists AS artist, n.genre AS genre,
-                       n.community AS community
-                ORDER BY n.betweenness IS NOT NULL DESC
-                LIMIT 5
-            """, track_id=last_id, used_ids=used_ids)
-            if neighbors.empty:
+            neighbors = [
+                n for n in list(G.predecessors(last_id)) + list(G.successors(last_id))
+                if n not in used_ids
+            ]
+            if not neighbors:
                 break
-            rng = np.random.default_rng()
-            next_song = neighbors.iloc[rng.integers(0, len(neighbors))]
+            # prefer nodes with betweenness
+            neighbors_with_bw = [n for n in neighbors if G.nodes[n].get('betweenness') is not None]
+            pool = neighbors_with_bw if neighbors_with_bw else neighbors
+            next_id = pool[rng.integers(0, len(pool))]
+            d = G.nodes[next_id]
             final_path = pd.concat([final_path, pd.DataFrame([{
-                'track_id':   next_song['track_id'],
-                'track_name': next_song['track_name'],
-                'artist':     next_song['artist'],
-                'genre':      next_song['genre'],
-                'community':  next_song['community'],
+                'track_id':   next_id,
+                'track_name': d.get('track_name'),
+                'artist':     d.get('artists'),
+                'genre':      d.get('genre'),
+                'community':  d.get('community'),
             }])], ignore_index=True)
-            used_ids.append(next_song['track_id'])
+            used_ids.add(next_id)
 
     return final_path.reset_index(drop=True)
 
 # ── startup ─────────────────────────────────────────────────────────────────────
-ensure_projection()
+G, nodes = load_graph()
 community_centroids = load_community_centroids()
 
 # ── ui ──────────────────────────────────────────────────────────────────────────
@@ -280,13 +204,8 @@ search_term = st.text_input("Search for a song", placeholder="e.g. Bohemian Rhap
 selected_track_id = None
 
 if search_term and len(search_term) >= 2:
-    results = run_query("""
-        MATCH (s:Song)
-        WHERE toLower(s.track_name) CONTAINS toLower($search_term)
-        RETURN s.id AS track_id, s.track_name AS track_name, s.artists AS artists
-        ORDER BY s.popularity DESC
-        LIMIT 8
-    """, search_term=search_term)
+    mask = nodes['track_name'].str.lower().str.contains(search_term.lower(), na=False)
+    results = nodes[mask].sort_values('popularity', ascending=False).head(8)
 
     if results.empty:
         st.warning("No songs found. Try a different search.")
@@ -301,7 +220,7 @@ if search_term and len(search_term) >= 2:
 if selected_track_id and st.button("Generate Queue", type="primary"):
     with st.spinner("Building your queue..."):
         try:
-            queue = generate_queue(selected_track_id, community_centroids)
+            queue = generate_queue(selected_track_id, G, nodes, community_centroids)
             st.success(f"Queue generated — {len(queue)} songs")
             st.dataframe(
                 queue[['track_name', 'artist', 'genre', 'community']].rename(columns={

@@ -1,4 +1,5 @@
 streamlit
-neo4j
 pandas
 numpy
+networkx
+pyarrow

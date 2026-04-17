@@ -8,3 +8,4 @@ __pycache__/
 
 # data
 *.csv
+# data/*.parquet  — parquet files are small enough to commit directly

@@ -321,7 +321,7 @@ st.markdown("""
 
     .queue-header {
         font-size: 0.7rem;
-        color: #6a6a6a;
+        color: #aaaaaa;
         text-transform: uppercase;
         letter-spacing: 0.12em;
         font-weight: 600;
@@ -338,7 +338,7 @@ st.markdown("""
     }
     .queue-row:hover { background: rgba(255,255,255,0.03); border-radius: 4px; }
     .queue-num {
-        font-size: 0.8rem; color: #4a4a4a; font-weight: 500;
+        font-size: 0.8rem; color: #aaaaaa; font-weight: 500;
         min-width: 18px; text-align: right; flex-shrink: 0;
     }
     .queue-main { flex: 1; min-width: 0; }

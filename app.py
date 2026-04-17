@@ -292,36 +292,70 @@ label_to_id = dict(zip(search_df['label'], search_df['track_id']))
 # ── custom css ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .hero { text-align: center; padding: 2rem 0 1.5rem 0; }
-    .hero h1 { font-size: 2.6rem; font-weight: 800; letter-spacing: -1px; margin-bottom: 0.2rem; color: #1db954; }
-    .hero p { color: #aaa; font-size: 1rem; margin-top: 0; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    .queue-row {
-        display: flex;
-        align-items: flex-start;
-        gap: 14px;
-        padding: 10px 0;
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+    .hero { text-align: center; padding: 2.5rem 0 2rem 0; }
+    .hero h1 {
+        font-size: 2.2rem; font-weight: 700; letter-spacing: -0.5px;
+        margin-bottom: 0.4rem; color: #ffffff;
+    }
+    .hero h1 span { color: #1db954; }
+    .hero p { color: #6a6a6a; font-size: 0.95rem; margin: 0; }
+
+    /* style the generate button green */
+    div.stButton > button[kind="primary"] {
+        background-color: #1db954 !important;
+        border: none !important;
+        color: #000 !important;
+        font-weight: 600 !important;
+        border-radius: 500px !important;
+        padding: 0.55rem 1rem !important;
+        font-size: 0.95rem !important;
+        margin-top: 0.5rem;
+    }
+    div.stButton > button[kind="primary"]:hover {
+        background-color: #1ed760 !important;
+    }
+
+    .queue-header {
+        font-size: 0.7rem;
+        color: #6a6a6a;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-weight: 600;
+        margin: 1.75rem 0 0.5rem 0;
+        padding-bottom: 0.5rem;
         border-bottom: 1px solid #2a2a2a;
     }
-    .queue-num { font-size: 0.85rem; color: #1db954; font-weight: 700; min-width: 20px; padding-top: 3px; }
-    .queue-info .track { font-size: 1rem; font-weight: 700; color: #ffffff; }
-    .queue-info .artist { font-size: 0.88rem; color: #ccc; margin: 2px 0; }
-    .queue-info .genre-tag {
-        display: inline-block;
-        font-size: 0.72rem;
-        color: #1db954;
-        background: rgba(29,185,84,0.12);
-        border-radius: 10px;
-        padding: 1px 8px;
-        margin-top: 3px;
+    .queue-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 9px 0;
+        border-bottom: 1px solid #1a1a1a;
     }
-    .queue-header {
-        font-size: 0.75rem;
-        color: #1db954;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        margin: 1.5rem 0 0.25rem 0;
-        font-weight: 700;
+    .queue-row:hover { background: rgba(255,255,255,0.03); border-radius: 4px; }
+    .queue-num {
+        font-size: 0.8rem; color: #4a4a4a; font-weight: 500;
+        min-width: 18px; text-align: right; flex-shrink: 0;
+    }
+    .queue-main { flex: 1; min-width: 0; }
+    .queue-title-row {
+        display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    }
+    .queue-track {
+        font-size: 0.95rem; font-weight: 600; color: #ffffff;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .queue-artist {
+        font-size: 0.82rem; color: #6a6a6a; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
+    }
+    .queue-genre {
+        font-size: 0.68rem; color: #4a4a4a; font-weight: 500;
+        white-space: nowrap; margin-left: auto; flex-shrink: 0; padding-left: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -329,7 +363,7 @@ st.markdown("""
 # ── ui ──────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class='hero'>
-    <h1>Song Queue Generator</h1>
+    <h1>Song Queue <span>Generator</span></h1>
     <p>Pick a song. We'll take you somewhere new.</p>
 </div>
 """, unsafe_allow_html=True)
@@ -338,27 +372,29 @@ selection = st.selectbox(
     "Search for a song or artist",
     options=search_df['label'].tolist(),
     index=None,
-    placeholder="e.g. Bohemian Rhapsody or Queen",
+    placeholder="Search songs or artists...",
     label_visibility="collapsed"
 )
 
 selected_track_id = label_to_id.get(selection)
 
 if selected_track_id and st.button("Generate Queue", type="primary", use_container_width=True):
-    with st.spinner("Building your queue..."):
+    with st.spinner(""):
         try:
             queue = generate_queue(selected_track_id, G, nodes, neighbor_communities, community_centroids)
-            st.markdown(f"<div class='queue-header'>Your Queue &nbsp;·&nbsp; {len(queue)} songs</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='queue-header'>Queue &nbsp;·&nbsp; {len(queue)} tracks</div>", unsafe_allow_html=True)
             rows_html = ""
             for i, row in queue.iterrows():
                 rows_html += f"""
                 <div class='queue-row'>
                     <div class='queue-num'>{i + 1}</div>
-                    <div class='queue-info'>
-                        <div class='track'>{row['track_name']}</div>
-                        <div class='artist'>{row['artist']}</div>
-                        <span class='genre-tag'>{row['genre']}</span>
+                    <div class='queue-main'>
+                        <div class='queue-title-row'>
+                            <span class='queue-track'>{row['track_name']}</span>
+                            <span class='queue-artist'>{row['artist']}</span>
+                        </div>
                     </div>
+                    <div class='queue-genre'>{row['genre']}</div>
                 </div>"""
             st.markdown(rows_html, unsafe_allow_html=True)
         except ValueError as e:

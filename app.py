@@ -94,7 +94,13 @@ def load_graph():
     for _, row in edges.iterrows():
         G.add_edge(row['source'], row['target'], cost=row['cost'], similarity=row['similarity'])
 
-    return G, nodes
+    # precompute neighbor community sets for fast bridge lookups
+    neighbor_communities = {
+        node: {G.nodes[n].get('community') for n in G.neighbors(node)}
+        for node in G.nodes
+    }
+
+    return G, nodes, neighbor_communities
 
 @st.cache_data
 def load_community_centroids():
@@ -110,7 +116,7 @@ def load_community_centroids():
     }
 
 # ── algorithm functions ─────────────────────────────────────────────────────────
-def find_target_community(input_community, community_centroids, G, nodes):
+def find_target_community(input_community, community_centroids, G, nodes, neighbor_communities):
     input_centroid = np.array(list(community_centroids[input_community].values()))
 
     distances = []
@@ -123,18 +129,13 @@ def find_target_community(input_community, community_centroids, G, nodes):
     distances.sort(key=lambda x: x[1])
     ranked_communities = [c for c, _ in distances]
 
-    # find reachable communities via bridge songs
+    # find reachable communities using precomputed neighbor index
     input_songs = set(nodes[nodes['community'] == input_community]['track_id'])
     valid_communities = set()
     for node_id in input_songs:
-        for neighbor_id in list(G.neighbors(node_id)):
-            bridge_comm = G.nodes[neighbor_id].get('community')
-            bw = G.nodes[neighbor_id].get('betweenness')
-            if bridge_comm in (input_community,) and bw is not None:
-                for second_neighbor in list(G.neighbors(neighbor_id)):
-                    tc = G.nodes[second_neighbor].get('community')
-                    if tc != input_community:
-                        valid_communities.add(tc)
+        for neighbor_id in G.neighbors(node_id):
+            if G.nodes[neighbor_id].get('community') == input_community and G.nodes[neighbor_id].get('betweenness') is not None:
+                valid_communities |= neighbor_communities[neighbor_id] - {input_community}
 
     rng = np.random.default_rng()
     for batch_size in [5, 10, 20, len(ranked_communities)]:
@@ -145,16 +146,15 @@ def find_target_community(input_community, community_centroids, G, nodes):
     raise ValueError(f'No reachable target community found from community {input_community}')
 
 
-def find_bridge_song(input_community, target_community, G, nodes):
+def find_bridge_song(input_community, target_community, G, nodes, neighbor_communities):
     candidates = []
     for node_id, data in G.nodes(data=True):
         if data.get('community') not in (input_community, target_community):
             continue
         if data.get('betweenness') is None:
             continue
-        neighbors = list(G.neighbors(node_id))
-        neighbor_comms = {G.nodes[n].get('community') for n in neighbors}
-        if input_community in neighbor_comms and target_community in neighbor_comms:
+        comms = neighbor_communities[node_id]
+        if input_community in comms and target_community in comms:
             candidates.append((node_id, data['betweenness'], data.get('community')))
 
     if not candidates:
@@ -192,7 +192,7 @@ def shortest_path(start_track_id, target_track_id, G):
     return pd.DataFrame(rows)
 
 
-def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=10, max_artist_appearances=2):
+def generate_queue(input_track_id, G, nodes, neighbor_communities, community_centroids, queue_length=10, max_artist_appearances=2):
     if input_track_id not in G.nodes:
         raise ValueError(f'No song found with track_id: {input_track_id}')
 
@@ -207,8 +207,8 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
     def ok(track_name, genre, artists):
         return allowed_in_queue(track_name, genre, artists, input_language)
 
-    target_community = find_target_community(input_community, community_centroids, G, nodes)
-    bridge_id, bridge_community = find_bridge_song(input_community, target_community, G, nodes)
+    target_community = find_target_community(input_community, community_centroids, G, nodes, neighbor_communities)
+    bridge_id, bridge_community = find_bridge_song(input_community, target_community, G, nodes, neighbor_communities)
     dest_row = pick_destination(target_community, bridge_id, nodes)
 
     path1 = shortest_path(input_track_id, bridge_id, G)
@@ -273,7 +273,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
     return final_path.reset_index(drop=True)
 
 # ── startup ─────────────────────────────────────────────────────────────────────
-G, nodes = load_graph()
+G, nodes, neighbor_communities = load_graph()
 community_centroids = load_community_centroids()
 
 # ── search index ────────────────────────────────────────────────────────────────
@@ -305,7 +305,7 @@ selected_track_id = label_to_id.get(selection)
 if selected_track_id and st.button("Generate Queue", type="primary"):
     with st.spinner("Building your queue..."):
         try:
-            queue = generate_queue(selected_track_id, G, nodes, community_centroids)
+            queue = generate_queue(selected_track_id, G, nodes, neighbor_communities, community_centroids)
             st.success(f"Queue generated — {len(queue)} songs")
             rows_html = ""
             for i, row in queue.iterrows():

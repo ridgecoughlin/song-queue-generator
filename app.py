@@ -11,6 +11,8 @@ st.set_page_config(
 )
 
 # ── language filter ─────────────────────────────────────────────────────────────
+import re
+
 NON_ENGLISH_GENRES = {
     'cantopop', 'mandopop', 'j-pop', 'j-rock', 'j-idol', 'j-dance',
     'k-pop', 'anime', 'turkish', 'french', 'german', 'swedish',
@@ -19,10 +21,57 @@ NON_ENGLISH_GENRES = {
     'malay', 'iranian', 'indian', 'romance', 'world-music', 'afrobeat',
 }
 
-def is_english(track_name, genre):
+NON_ENGLISH_ARTISTS = re.compile(
+    r'\b(bad bunny|karol g|j balvin|daddy yankee|ozuna|maluma|anuel aa|'
+    r'jhayco|feid|sech|myke towers|rauw alejandro|farruko|nicky jam|'
+    r'zion|chencho corleone|manuel turizo|camilo|sebastián yatra|'
+    r'paulo londra|cnco|becky g|natti natasha|lunay|mora|dei v|'
+    r'arcangel|de la ghetto|ñengo flow|wisin|yandel|plan b|'
+    r'cosculluela|alex rose|lyanno|brray|eladio carrión|'
+    r'burna boy|wizkid|davido|afrobeats|piso 21|chris jedi|'
+    r'polimá westcoast|paloma mami|standly|cris mj|'
+    r'j balvin|bad gyal|ptazeta|neo pistea|'
+    r'rosalía|c tangana|bad gyal|quevedo|bizarrap)\b',
+    re.IGNORECASE
+)
+
+_SPANISH_RE = re.compile(
+    r'\b(el|la|los|las|un|una|de|del|que|por|con|para|como|todo|pero|'
+    r'hay|fue|ser|muy|sin|sobre|entre|cuando|donde|aunque|porque|desde|'
+    r'hasta|tambien|solo|siempre|nunca|algo|nada|cada|otro|otra|mismo|'
+    r'misma|hace|querer|saber|llegar|pasar|seguir|llamar|venir|pensar|'
+    r'poner|parecer|quedar|creer|hablar|llevar|dejar|sentir|conocer|'
+    r'vivir|decir|ver|dar|estar|agua|amor|vida|tiempo|mundo|casa|forma|'
+    r'parte|lugar|dia|vez|noche|ciudad|pueblo|camino|tierra|cielo|'
+    r'corazon|mente|gente|hijo|madre|padre|hermano|amigo|te|tu|mi|'
+    r'yo|no|si|me|lo|le|se|al|es|en|su|ya|ni|o)\b',
+    re.IGNORECASE
+)
+
+def is_english(track_name, artists=''):
+    if not str(track_name).isascii():
+        return False
+    if not str(artists).isascii():
+        return False
+    return True
+
+def _has_spanish_words(text):
+    words = re.findall(r'\b\w+\b', str(text).lower())
+    if not words:
+        return False
+    matches = sum(1 for w in words if _SPANISH_RE.match(w))
+    return matches / len(words) > 0.35
+
+def is_english_song(track_name, genre, artists=''):
     if genre in NON_ENGLISH_GENRES:
         return False
     if not str(track_name).isascii():
+        return False
+    if not str(artists).isascii():
+        return False
+    if NON_ENGLISH_ARTISTS.search(str(artists)):
+        return False
+    if _has_spanish_words(track_name):
         return False
     return True
 
@@ -156,7 +205,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
     final_path = final_path.drop_duplicates(subset='track_id', keep='first')
     final_path = final_path.drop_duplicates(subset='track_name', keep='first')
     final_path = final_path[final_path.apply(
-        lambda r: is_english(r['track_name'], r['genre']), axis=1
+        lambda r: is_english_song(r['track_name'], r['genre'], r['artist']), axis=1
     )].reset_index(drop=True)
 
     # artist repeat limiting
@@ -173,7 +222,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
             replacements = [
                 n for n in neighbors
                 if G.nodes[n].get('artists') != artist and n not in used_ids
-                and is_english(G.nodes[n].get('track_name', ''), G.nodes[n].get('genre', ''))
+                and is_english_song(G.nodes[n].get('track_name', ''), G.nodes[n].get('genre', ''), G.nodes[n].get('artists', ''))
             ]
             if replacements:
                 r_id = replacements[rng.integers(0, len(replacements))]
@@ -191,7 +240,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
             neighbors = [
                 n for n in list(G.neighbors(last_id))
                 if n not in used_ids
-                and is_english(G.nodes[n].get('track_name', ''), G.nodes[n].get('genre', ''))
+                and is_english_song(G.nodes[n].get('track_name', ''), G.nodes[n].get('genre', ''), G.nodes[n].get('artists', ''))
             ]
             if not neighbors:
                 break
@@ -219,7 +268,7 @@ community_centroids = load_community_centroids()
 @st.cache_data
 def build_search_df():
     df = pd.read_parquet("data/nodes.parquet")[['track_id', 'track_name', 'artists', 'popularity', 'genre']]
-    df = df[df.apply(lambda r: is_english(r['track_name'], r['genre']), axis=1)]
+    df = df[df.apply(lambda r: is_english_song(r['track_name'], r['genre'], r['artists']), axis=1)]
     df['label'] = df['track_name'] + ' — ' + df['artists']
     df = df.sort_values('popularity', ascending=False).drop_duplicates(subset='label')
     return df

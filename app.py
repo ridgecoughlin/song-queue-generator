@@ -204,32 +204,20 @@ def build_search_df():
     return df
 
 search_df = build_search_df()
+label_to_id = dict(zip(search_df['label'], search_df['track_id']))
 
 # ── ui ──────────────────────────────────────────────────────────────────────────
 st.title("🎵 Song Queue Generator")
 st.caption("Search for a song and we'll build a queue that takes you on a sonic journey.")
 
-search_input = st.text_input(
+selection = st.selectbox(
     "Search for a song or artist",
+    options=search_df['label'].tolist(),
+    index=None,
     placeholder="e.g. Bohemian Rhapsody or Queen"
 )
 
-selected_track_id = None
-
-if search_input and len(search_input) >= 2:
-    term = search_input.lower()
-    mask = (
-        search_df['track_name'].str.lower().str.contains(term, na=False) |
-        search_df['artists'].str.lower().str.contains(term, na=False)
-    )
-    results = search_df[mask].head(10)
-
-    if results.empty:
-        st.warning("No songs found. Try a different search.")
-    else:
-        options = {row['label']: row['track_id'] for _, row in results.iterrows()}
-        selection = st.selectbox("Select a song", options=list(options.keys()), index=0)
-        selected_track_id = options[selection]
+selected_track_id = label_to_id.get(selection)
 
 if selected_track_id and st.button("Generate Queue", type="primary"):
     with st.spinner("Building your queue..."):

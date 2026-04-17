@@ -350,11 +350,11 @@ st.markdown("""
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .queue-artist {
-        font-size: 0.82rem; color: #6a6a6a; white-space: nowrap;
+        font-size: 0.82rem; color: #aaaaaa; white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis;
     }
     .queue-genre {
-        font-size: 0.68rem; color: #4a4a4a; font-weight: 500;
+        font-size: 0.68rem; color: #888888; font-weight: 500;
         white-space: nowrap; margin-left: auto; flex-shrink: 0; padding-left: 8px;
     }
 </style>

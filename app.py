@@ -10,6 +10,22 @@ st.set_page_config(
     layout="centered"
 )
 
+# ── language filter ─────────────────────────────────────────────────────────────
+NON_ENGLISH_GENRES = {
+    'cantopop', 'mandopop', 'j-pop', 'j-rock', 'j-idol', 'j-dance',
+    'k-pop', 'anime', 'turkish', 'french', 'german', 'swedish',
+    'spanish', 'latin', 'latino', 'reggaeton', 'sertanejo', 'forro',
+    'pagode', 'samba', 'mpb', 'brazil', 'salsa', 'tango',
+    'malay', 'iranian', 'indian', 'romance', 'world-music', 'afrobeat',
+}
+
+def is_english(track_name, genre):
+    if genre in NON_ENGLISH_GENRES:
+        return False
+    if not str(track_name).isascii():
+        return False
+    return True
+
 # ── data loading ────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_graph():
@@ -139,7 +155,9 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
 
     final_path = final_path.drop_duplicates(subset='track_id', keep='first')
     final_path = final_path.drop_duplicates(subset='track_name', keep='first')
-    final_path = final_path.reset_index(drop=True)
+    final_path = final_path[final_path.apply(
+        lambda r: is_english(r['track_name'], r['genre']), axis=1
+    )].reset_index(drop=True)
 
     # artist repeat limiting
     artist_counts = final_path['artist'].value_counts()
@@ -155,6 +173,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
             replacements = [
                 n for n in neighbors
                 if G.nodes[n].get('artists') != artist and n not in used_ids
+                and is_english(G.nodes[n].get('track_name', ''), G.nodes[n].get('genre', ''))
             ]
             if replacements:
                 r_id = replacements[rng.integers(0, len(replacements))]
@@ -172,6 +191,7 @@ def generate_queue(input_track_id, G, nodes, community_centroids, queue_length=1
             neighbors = [
                 n for n in list(G.neighbors(last_id))
                 if n not in used_ids
+                and is_english(G.nodes[n].get('track_name', ''), G.nodes[n].get('genre', ''))
             ]
             if not neighbors:
                 break
@@ -198,7 +218,8 @@ community_centroids = load_community_centroids()
 # ── search index ────────────────────────────────────────────────────────────────
 @st.cache_data
 def build_search_df():
-    df = pd.read_parquet("data/nodes.parquet")[['track_id', 'track_name', 'artists', 'popularity']]
+    df = pd.read_parquet("data/nodes.parquet")[['track_id', 'track_name', 'artists', 'popularity', 'genre']]
+    df = df[df.apply(lambda r: is_english(r['track_name'], r['genre']), axis=1)]
     df['label'] = df['track_name'] + ' — ' + df['artists']
     df = df.sort_values('popularity', ascending=False).drop_duplicates(subset='label')
     return df

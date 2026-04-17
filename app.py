@@ -307,12 +307,15 @@ if selected_track_id and st.button("Generate Queue", type="primary"):
         try:
             queue = generate_queue(selected_track_id, G, nodes, community_centroids)
             st.success(f"Queue generated — {len(queue)} songs")
+            rows_html = ""
             for i, row in queue.iterrows():
-                st.markdown(
-                    f"**{i + 1}. {row['track_name']}** &nbsp; {row['artist']}<br>"
-                    f"<small><i>{row['genre']}</i></small>",
-                    unsafe_allow_html=True
+                rows_html += (
+                    f"<div style='padding: 8px 0; border-bottom: 1px solid #e0e0e0;'>"
+                    f"<span style='font-weight:600;'>{i + 1}. {row['track_name']}</span>"
+                    f" &nbsp; {row['artist']}<br>"
+                    f"<span style='font-size:0.8em; color:gray;'><i>{row['genre']}</i></span>"
+                    f"</div>"
                 )
-                st.divider()
+            st.markdown(rows_html, unsafe_allow_html=True)
         except ValueError as e:
             st.error(f"Error: {e}")

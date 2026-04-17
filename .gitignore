@@ -1,0 +1,10 @@
+# streamlit secrets - never commit credentials
+.streamlit/secrets.toml
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# data
+*.csv

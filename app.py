@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import networkx as nx
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+import urllib.parse
 
 # ── page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -296,6 +299,85 @@ if 'breadcrumb' not in st.session_state:
     st.session_state.breadcrumb = []       # list of (track_name, artist) tuples
 if 'pending_seed' not in st.session_state:
     st.session_state.pending_seed = None   # track_id queued for next rerun
+if 'spotify_token' not in st.session_state:
+    st.session_state.spotify_token = None  # cached OAuth token dict
+if 'playlist_status' not in st.session_state:
+    st.session_state.playlist_status = None  # success/error message
+
+# ── spotify helpers ──────────────────────────────────────────────────────────────
+SPOTIFY_SCOPE = "playlist-modify-public playlist-modify-private"
+
+def get_oauth():
+    return SpotifyOAuth(
+        client_id=st.secrets["SPOTIFY_CLIENT_ID"],
+        client_secret=st.secrets["SPOTIFY_CLIENT_SECRET"],
+        redirect_uri=st.secrets["SPOTIFY_REDIRECT_URI"],
+        scope=SPOTIFY_SCOPE,
+        cache_path=None,   # no file cache — use session state only
+        show_dialog=False,
+    )
+
+def get_auth_url():
+    oauth = get_oauth()
+    return oauth.get_authorize_url()
+
+def exchange_code_for_token(code):
+    oauth = get_oauth()
+    return oauth.get_access_token(code, as_dict=True, check_cache=False)
+
+def get_spotify_client():
+    token = st.session_state.spotify_token
+    if token is None:
+        return None
+    oauth = get_oauth()
+    if oauth.is_token_expired(token):
+        token = oauth.refresh_access_token(token['refresh_token'])
+        st.session_state.spotify_token = token
+    return spotipy.Spotify(auth=token['access_token'])
+
+def search_spotify_uri(sp, track_name, artist):
+    """Search Spotify for a track URI by name + artist."""
+    q = f"track:{track_name} artist:{artist}"
+    results = sp.search(q=q, type='track', limit=1)
+    items = results.get('tracks', {}).get('items', [])
+    return items[0]['uri'] if items else None
+
+def create_spotify_playlist(queue_df, seed_name):
+    sp = get_spotify_client()
+    if sp is None:
+        return None, "Not authenticated"
+
+    user_id = sp.me()['id']
+    playlist_name = f"Queue from {seed_name}"
+    playlist = sp.user_playlist_create(user_id, playlist_name, public=False,
+                                        description="Created by Song Queue Generator")
+
+    uris = []
+    for _, row in queue_df.iterrows():
+        uri = search_spotify_uri(sp, row['track_name'], row['artist'])
+        if uri:
+            uris.append(uri)
+
+    if uris:
+        sp.playlist_add_items(playlist['id'], uris)
+
+    matched = len(uris)
+    total = len(queue_df)
+    url = playlist['external_urls']['spotify']
+    return url, f"Playlist created with {matched}/{total} songs matched"
+
+# ── handle spotify oauth callback ────────────────────────────────────────────────
+query_params = st.query_params
+if 'code' in query_params and st.session_state.spotify_token is None:
+    code = query_params['code']
+    try:
+        token = exchange_code_for_token(code)
+        st.session_state.spotify_token = token
+    except Exception as e:
+        st.session_state.playlist_status = f"Spotify auth failed: {e}"
+    # clear code from URL
+    st.query_params.clear()
+    st.rerun()
 
 # ── custom css ──────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -394,6 +476,21 @@ st.markdown("""
         white-space: nowrap; flex-shrink: 0; padding-left: 4px;
     }
 
+    /* spotify connect/save button (anchor styled as pill) */
+    a.spotify-btn {
+        display: inline-block;
+        background-color: #1db954;
+        color: #000 !important;
+        font-weight: 600;
+        font-size: 0.78rem;
+        border-radius: 500px;
+        padding: 0.35rem 0.85rem;
+        text-decoration: none !important;
+        white-space: nowrap;
+        margin-top: 1.6rem;
+    }
+    a.spotify-btn:hover { background-color: #1ed760; }
+
     /* queue row buttons — transparent, full-width, left-aligned */
     div[data-testid="stHorizontalBlock"] div.stButton > button {
         background: transparent !important;
@@ -480,7 +577,29 @@ if st.session_state.queue is not None:
             st.session_state.breadcrumb = []
             st.rerun()
 
-    st.markdown(f"<div class='queue-header'>Queue &nbsp;·&nbsp; {len(queue)} tracks &nbsp;·&nbsp; click any song to branch</div>", unsafe_allow_html=True)
+    # header row: queue label left, save to spotify right
+    hcol_label, hcol_btn = st.columns([5, 2])
+    with hcol_label:
+        st.markdown(f"<div class='queue-header'>Queue &nbsp;·&nbsp; {len(queue)} tracks &nbsp;·&nbsp; click any song to branch</div>", unsafe_allow_html=True)
+    with hcol_btn:
+        if st.session_state.spotify_token is None:
+            auth_url = get_auth_url()
+            st.markdown(
+                f"<a href='{auth_url}' target='_self' class='spotify-btn'>Connect Spotify</a>",
+                unsafe_allow_html=True
+            )
+        else:
+            if st.button("💚 Save to Spotify", key="save_spotify"):
+                seed_name = st.session_state.breadcrumb[0][0] if st.session_state.breadcrumb else "Queue"
+                with st.spinner("Creating playlist..."):
+                    url, msg = create_spotify_playlist(queue, seed_name)
+                if url:
+                    st.session_state.playlist_status = f"[Open playlist in Spotify]({url}) &nbsp;·&nbsp; {msg}"
+                else:
+                    st.session_state.playlist_status = f"Error: {msg}"
+
+    if st.session_state.playlist_status:
+        st.markdown(st.session_state.playlist_status, unsafe_allow_html=True)
 
     for i, row in queue.iterrows():
         # each queue row: number + song info on left, genre on right, branch button far right

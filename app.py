@@ -519,6 +519,10 @@ if st.session_state.pending_seed is not None:
             st.error(f"Error: {e}")
 
 # search + generate
+if st.session_state.spotify_token is None:
+    auth_url = get_auth_url()
+    st.link_button("Connect Spotify to save playlists", auth_url, use_container_width=True)
+
 selection = st.selectbox(
     "Search for a song or artist",
     options=search_df['label'].tolist(),
@@ -566,10 +570,7 @@ if st.session_state.queue is not None:
     with hcol_label:
         st.markdown(f"<div class='queue-header'>Queue &nbsp;·&nbsp; {len(queue)} tracks &nbsp;·&nbsp; click any song to branch</div>", unsafe_allow_html=True)
     with hcol_btn:
-        if st.session_state.spotify_token is None:
-            auth_url = get_auth_url()
-            st.link_button("Connect Spotify", auth_url, use_container_width=True)
-        else:
+        if st.session_state.spotify_token is not None:
             if st.button("💚 Save to Spotify", key="save_spotify"):
                 seed_name = st.session_state.breadcrumb[0][0] if st.session_state.breadcrumb else "Queue"
                 with st.spinner("Creating playlist..."):

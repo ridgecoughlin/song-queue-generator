@@ -347,10 +347,9 @@ def create_spotify_playlist(queue_df, seed_name):
     if sp is None:
         return None, "Not authenticated"
 
-    user_id = sp.me()['id']
     playlist_name = f"Queue from {seed_name}"
-    playlist = sp.user_playlist_create(user_id, playlist_name, public=False,
-                                        description="Created by Song Queue Generator")
+    playlist = sp.current_user_playlist_create(playlist_name, public=False,
+                                               description="Created by Song Queue Generator")
 
     uris = []
     for _, row in queue_df.iterrows():

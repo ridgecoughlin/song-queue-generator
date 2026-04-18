@@ -476,21 +476,6 @@ st.markdown("""
         white-space: nowrap; flex-shrink: 0; padding-left: 4px;
     }
 
-    /* spotify connect/save button (anchor styled as pill) */
-    a.spotify-btn {
-        display: inline-block;
-        background-color: #1db954;
-        color: #000 !important;
-        font-weight: 600;
-        font-size: 0.78rem;
-        border-radius: 500px;
-        padding: 0.35rem 0.85rem;
-        text-decoration: none !important;
-        white-space: nowrap;
-        margin-top: 1.6rem;
-    }
-    a.spotify-btn:hover { background-color: #1ed760; }
-
     /* queue row buttons — transparent, full-width, left-aligned */
     div[data-testid="stHorizontalBlock"] div.stButton > button {
         background: transparent !important;
@@ -584,10 +569,7 @@ if st.session_state.queue is not None:
     with hcol_btn:
         if st.session_state.spotify_token is None:
             auth_url = get_auth_url()
-            st.markdown(
-                f"<a href='{auth_url}' target='_self' class='spotify-btn'>Connect Spotify</a>",
-                unsafe_allow_html=True
-            )
+            st.link_button("Connect Spotify", auth_url, use_container_width=True)
         else:
             if st.button("💚 Save to Spotify", key="save_spotify"):
                 seed_name = st.session_state.breadcrumb[0][0] if st.session_state.breadcrumb else "Queue"

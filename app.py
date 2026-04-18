@@ -574,11 +574,14 @@ if st.session_state.queue is not None:
             if st.button("💚 Save to Spotify", key="save_spotify"):
                 seed_name = st.session_state.breadcrumb[0][0] if st.session_state.breadcrumb else "Queue"
                 with st.spinner("Creating playlist..."):
-                    url, msg = create_spotify_playlist(queue, seed_name)
-                if url:
-                    st.session_state.playlist_status = f"[Open playlist in Spotify]({url}) &nbsp;·&nbsp; {msg}"
-                else:
-                    st.session_state.playlist_status = f"Error: {msg}"
+                    try:
+                        url, msg = create_spotify_playlist(queue, seed_name)
+                        if url:
+                            st.session_state.playlist_status = f"[Open playlist in Spotify]({url}) &nbsp;·&nbsp; {msg}"
+                        else:
+                            st.session_state.playlist_status = f"Error: {msg}"
+                    except Exception as e:
+                        st.session_state.playlist_status = f"Spotify error: {e}"
 
     if st.session_state.playlist_status:
         st.markdown(st.session_state.playlist_status, unsafe_allow_html=True)
